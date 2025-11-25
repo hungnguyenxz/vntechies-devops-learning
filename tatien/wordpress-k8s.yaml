@@ -1,0 +1,124 @@
+# Note: This file contains multiple K8s resources separated by '---'
+#
+# Assignment Component: Secret for MySQL
+# This creates a 'Secret' to hold the MySQL root password.
+# Using 'StringData' makes it easy to provide the password as a plain string.
+#### 
+##Run this command in your terminal. This command reads your passwords.env file and creates a new secret in your cluster named app-passwords.
+## kubectl create secret generic app-passwords --from-env-file=passwords.env
+---
+# Assignment Component: Service for MySQL
+# This creates a 'ClusterIP' service (the default type).
+# It gives the MySQL pods a stable network name ('mysql-service')
+# that WordPress can use to connect.
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+spec:
+  ports:
+    - port: 3306
+  selector:
+    app: mysql
+  # This makes it a "headless" service, which is often fine for a single db instance
+  # but a standard ClusterIP is also fine. We'll stick to a standard one.
+  clusterIP: None 
+
+---
+# Assignment Component: Deployment for MySQL
+# This creates a 'Deployment' to manage the MySQL 'Pod'.
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:5.7
+          ports:
+            - containerPort: 3306
+          env:
+            # Get the password from the 'Secret' we created earlier
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-passwords
+                  key: MYSQL_ROOT_PASSWORD
+            # You can also set the database name here
+            - name: MYSQL_DATABASE
+              value: "wordpress_db"
+
+---
+# Assignment Component: Service for WordPress
+# This creates a 'ClusterIP' service for WordPress.
+# We use ClusterIP because the assignment specifically asks
+# to use 'port-forwarding' for access at the end.
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress-service
+spec:
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+  selector:
+    app: wordpress
+  type: ClusterIP
+
+---
+# Assignment Component: Deployment for WordPress
+# This creates a 'Deployment' to manage the WordPress 'Pod'.
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wordpress
+  template:
+    metadata:
+      labels:
+        app: wordpress
+    spec:
+      containers:
+        - name: wordpress
+          image: wordpress:latest
+          ports:
+            - containerPort: 80
+          env:
+            # Here we tell WordPress how to connect to the database
+            # We use the 'Service' name for the host
+            - name: WORDPRESS_DB_HOST
+              value: "mysql-service"
+            - name: WORDPRESS_DB_USER
+              value: "root"
+            - name: WORDPRESS_DB_NAME
+              value: "wordpress_db"
+            # Get the password from the same 'Secret'
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-passwords
+                  key: WORDPRESS_DB_PASSWORD
+      # This initContainer is a good practice to ensure MySQL is ready
+      # before WordPress starts, preventing connection errors.
+      initContainers:
+        - name: wait-for-mysql
+          image: busybox:1.28
+          command: ['sh', '-c', 'until nslookup mysql-service; do echo waiting for mysql; sleep 2; done']
