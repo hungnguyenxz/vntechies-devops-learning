@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+    tools {
+        nodejs 'node18'
+    }
+    environment {
+        REGISTRY = "docker.io/hungitpro"
+        IMAGE = "cowsay-api"
+        TAG = "latest"
+        GIT_URL       = 'https://github.com/hungnguyenxz/devops-project-application-cowsay-api.git'
+        BRANCH        = 'main'
+        GIT_CREDENTIAL_ID = 'GITHUB_PAT_CREDS'
+        DOCKER_REGISTRY_CREDENTIAL_ID = 'DOCKER_REGISTRY_CREDS'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${BRANCH}"]],
+                        userRemoteConfigs: [[
+                            url: GIT_URL,
+                            credentialsId: GIT_CREDENTIAL_ID
+                        ]]
+                    ])
+                
+            }
+        }
+
+        stage('Build & Test') {
+            steps {
+                sh "npm install"
+                //sh "npm test"
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh """
+                    docker build -t $REGISTRY/$IMAGE:$TAG .
+                    docker tag $REGISTRY/$IMAGE:$TAG $REGISTRY/$IMAGE:latest
+                """
+            }
+        }
+
+        stage('Push Image') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: DOCKER_REGISTRY_CREDENTIAL_ID,
+                    usernameVariable: 'USER',
+                    passwordVariable: 'PASS'
+                )]) {
+                    sh "echo $PASS | docker login -u $USER --password-stdin"
+                }
+                
+                sh """
+                    docker push $REGISTRY/$IMAGE:$TAG
+                    docker push $REGISTRY/$IMAGE:latest
+                """
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: DOCKER_REGISTRY_CREDENTIAL_ID,
+                    usernameVariable: 'USER',
+                    passwordVariable: 'PASS'
+                )]) {
+                    sshagent(['application-ssh-key']) {
+                        sh '''
+                          ssh -o StrictHostKeyChecking=no ubuntu@52.6.2.225 "
+                            echo $PASS | docker login -u $USER --password-stdin &&
+                            docker pull $REGISTRY/$IMAGE:$TAG &&
+                            docker ps -a | grep $IMAGE && docker stop $IMAGE && docker rm $IMAGE || true
+                            docker run -d -p 3001:3001 --name $IMAGE $REGISTRY/$IMAGE:$TAG
+                          "
+                        '''
+                    }
+                }
+            }
+        }
+    }
+}
